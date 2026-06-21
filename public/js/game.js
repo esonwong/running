@@ -448,7 +448,7 @@ function updateDebug() {
     v ? `视频 ${v.videoWidth}x${v.videoHeight} ready=${v.readyState} paused=${v.paused} t=${v.currentTime.toFixed(2)}` : "",
     pose ? `追踪=${pose.tracked}  动作=${pose.label}  基线Y=${pose.baseY === null ? "未校准" : pose.baseY.toFixed(3)}` : "",
     pose ? `lean=${(pose.lean || 0).toFixed(2)}  蹲=${pose.isSquatting}  垂直Δ=${(pose.dVert || 0).toFixed(3)} (跳阈${(pose.jumpThresh || 0.05).toFixed(2)} 蹲阈0.04)` : "",
-    pose ? `出拳速Δ=${(pose.dPunch || 0).toFixed(3)}  拳阈=${(pose.punchThresh || 0.06).toFixed(2)}` : "",
+    pose ? `出拳伸展=${(pose.dPunch || 0).toFixed(2)} 臂态L/R=${pose._armState ? pose._armState.L[0] + "/" + pose._armState.R[0] : "?"} (阈高${(pose.punchExtHigh || 0.85).toFixed(2)} 阈低${(pose.punchExtLow || 0.72).toFixed(2)})` : "",
     `相机 x=${camera.position.x.toFixed(2)} y=${camera.position.y.toFixed(2)} z=${camera.position.z.toFixed(1)}`,
     `[D]隐藏面板  键盘:←→ 空格跳 ↓蹲 F拳`,
   ].filter(Boolean);
@@ -556,21 +556,28 @@ async function start() {
     if (jpeak > 0.05) pose.jumpThresh = Math.min(0.12, Math.max(0.04, jpeak * 0.5));
     pose._jumpQueued = false; // 清除校准期间的误触发
 
-    // 出拳校准：向前打拳，按你的实际前冲速度设定个性化阈值
-    $("load-text").textContent = "向前出拳！";
-    $("load-hint").textContent = "用力向前打几拳";
-    let ppeak = 0; const pt0 = performance.now();
+    // 出拳校准：记录你出拳的"伸展范围"（收回↔伸直），自适应阈值
+    $("load-text").textContent = "向前出拳几次！";
+    $("load-hint").textContent = "收回再用力打出，重复几下";
+    let extPeak = 0, extMin = 1; const pt0 = performance.now();
     await new Promise((resolve) => {
       (function tick() {
         const el = performance.now() - pt0;
-        if (pose.tracked) ppeak = Math.max(ppeak, pose.dPunch || 0);
+        if (pose.tracked) {
+          const e = pose.dPunch || 0;
+          if (e > extPeak) extPeak = e;
+          if (e < extMin && e > 0.3) extMin = e;
+        }
         loadProgress(Math.min(100, (el / PUNCHCAL_MS) * 100));
-        $("load-hint").textContent = ppeak > 0.05 ? `已记录出拳 ${ppeak.toFixed(2)} ✓` : "用力向前打几拳";
+        $("load-hint").textContent = extPeak - extMin > 0.12 ? `已记录出拳 ✓` : "收回再用力打出，重复几下";
         if (el >= PUNCHCAL_MS) resolve();
         else requestAnimationFrame(tick);
       })();
     });
-    if (ppeak > 0.05) pose.punchThresh = Math.min(0.2, Math.max(0.04, ppeak * 0.5));
+    if (extPeak - extMin > 0.12) {
+      pose.punchExtHigh = Math.min(0.95, Math.max(0.78, extMin + 0.6 * (extPeak - extMin)));
+      pose.punchExtLow = Math.min(pose.punchExtHigh - 0.05, Math.max(0.6, extMin + 0.25 * (extPeak - extMin)));
+    }
     pose._punchQueued = false; // 清除校准期间的误触发
   }
   $("loading").classList.add("hidden");

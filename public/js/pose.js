@@ -9,8 +9,11 @@ import {
 // 关键点索引（MediaPipe Pose 33 点）
 const NOSE = 0;
 const L_SHOULDER = 11, R_SHOULDER = 12;
+const L_ELBOW = 13, R_ELBOW = 14;
 const L_WRIST = 15, R_WRIST = 16;
 const L_HIP = 23, R_HIP = 24;
+
+const dist2 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 // 可调阈值（不同身高/摄像头可微调）
 const TH = {
@@ -50,8 +53,12 @@ export class PoseController {
     this.handsUp = false; // 双手举过头顶（用于结束后体感重开）
     this.jumpThresh = TH.jump; // 跳跃阈值，可被跳跃校准覆盖
     this.dUp = 0;             // 当前重心上移量（正=向上）
-    this.punchThresh = TH.punchZ; // 出拳阈值，可被出拳校准覆盖
-    this.dPunch = 0;          // 当前手腕前冲速度（取双手较大值）
+    // 出拳：基于手臂伸展度（肩-肘-腕 2D），比深度 z 稳
+    this.punchExtHigh = 0.85; // 伸展度超过此值=手臂基本伸直（可被校准覆盖）
+    this.punchExtLow = 0.72;  // 低于此值=手臂收回（可再次出拳）
+    this.dPunch = 0;          // 当前最大手臂伸展度（0.5 弯 ~ 1.0 直），用于校准/调试
+    this._armState = { L: "bent", R: "bent" };
+    this._lastBent = { L: 0, R: 0 };
     this.tracked = false;
     this.label = "—";
 
@@ -242,25 +249,32 @@ export class PoseController {
     else if (this.dVert < TH.squatExit) this.isSquatting = false;
 
     // ---- 出拳：手腕世界坐标 z 朝摄像头快速位移 ----
-    if (world) {
-      let maxDz = 0;
-      for (const [key, idx] of [["L", L_WRIST], ["R", R_WRIST]]) {
-        const z = world[idx].z;
-        const prev = this._prevWristZ[key];
-        if (prev !== null) {
-          const dz = prev - z; // z 变小=靠近摄像头
-          if (dz > maxDz) maxDz = dz;
-          // 手腕大致在胸口高度才算有效出拳
-          const wristY = lm[idx].y;
-          const chest = (lm[L_SHOULDER].y + lm[L_HIP].y) / 2;
-          if (dz > this.punchThresh && wristY < chest + 0.12) {
-            this._punchQueued = true;
-          }
-        }
-        this._prevWristZ[key] = z;
+    // 出拳：手臂"快速伸展"检测（肩-肘-腕 2D）。
+    // 一拳 = 手臂从弯(ext<低阈)在 350ms 内伸直(ext>高阈)，且手腕在胸口高度以上；
+    // 伸出后状态置 armed，必须收回到弯曲才能再次触发，避免举着手刷拳。
+    const chestY = (lm[L_SHOULDER].y + lm[L_HIP].y) / 2;
+    let maxExt = 0;
+    for (const [key, sh, el, wr] of [
+      ["L", L_SHOULDER, L_ELBOW, L_WRIST],
+      ["R", R_SHOULDER, R_ELBOW, R_WRIST],
+    ]) {
+      const armLen = dist2(lm[sh], lm[el]) + dist2(lm[el], lm[wr]) + 1e-6;
+      const ext = dist2(lm[sh], lm[wr]) / armLen; // 0.5 弯 ~ 1.0 直
+      if (ext > maxExt) maxExt = ext;
+      if (ext < this.punchExtLow) {
+        this._armState[key] = "bent";
+        this._lastBent[key] = nowMs;
+      } else if (
+        this._armState[key] === "bent" &&
+        ext > this.punchExtHigh &&
+        nowMs - this._lastBent[key] < 350 &&
+        lm[wr].y < chestY + 0.15
+      ) {
+        this._punchQueued = true;
+        this._armState[key] = "armed";
       }
-      this.dPunch = maxDz;
     }
+    this.dPunch = maxExt;
 
     // 双手举过头顶（两手腕都高于鼻子）
     this.handsUp = lm[L_WRIST].y < lm[NOSE].y && lm[R_WRIST].y < lm[NOSE].y;

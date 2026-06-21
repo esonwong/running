@@ -42,8 +42,9 @@ python3 -m http.server 8000
 动作识别阈值在 `js/pose.js` 顶部的 `TH` 对象里：
 
 - `jump` / `squat`：跳、蹲的重心位移灵敏度
-- `punchZ`：出拳的前冲速度阈值
 - `leanScale`：左右侧移灵敏度
+
+出拳用"手臂快速伸展"检测（肩-肘-腕 2D），阈值 `punchExtHigh / punchExtLow` 在 `PoseController` 里，开局"向前出拳"校准会按你的伸展范围自适应。
 
 走廊节奏 / 难度在 `js/game.js` 顶部常量（`SEG`、`NUM_SEG`、`speed`、`maybeSpawn` 的 `density`）。
 
