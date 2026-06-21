@@ -73,6 +73,19 @@ export const Sound = {
     this._blip({ freq: 90,  type: "sawtooth", dur: 0.42, vol: 0.40, sweep: -45 });
     this._blip({ freq: 130, type: "square",   dur: 0.30, vol: 0.20, sweep: -60 });
   },
+
+  // 击碎：高频碎裂噪声 + 低频冲击
+  shatter() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const s = ctx.createBufferSource(); s.buffer = this._noise(0.2, 1.2);
+    const hp = ctx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 2600;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.5, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+    s.connect(hp); hp.connect(g); g.connect(master); s.start(t); s.stop(t + 0.22);
+    this._blip({ freq: 190, type: "square", dur: 0.12, vol: 0.32, sweep: -100 });
+  },
   go() { this._blip({ freq: 440, type: "triangle", dur: 0.18, vol: 0.30, sweep: 240 }); },
   gameover() {
     if (!ctx) return;

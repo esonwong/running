@@ -185,6 +185,7 @@ let lastPunch = -9999;
 let invuln = 0;
 let poseOk = false;
 let wasSquatting = false; // 下蹲边沿检测（触发音效）
+let screenShake = 0;      // 震屏强度
 const clock = new THREE.Clock();
 
 // 键盘备选（体感不可用时仍能玩；也方便调试）
@@ -234,8 +235,8 @@ function handleActions(dt) {
   if (kbPunch) { punchPulse = true; kbPunch = false; }
   if (punchPulse) {
     lastPunch = performance.now();
-    flashCue("击", "#ff8855");
     Sound.punch();
+    if (!tryPunchBreak()) flashCue("击", "#ff8855"); // 击中前方障碍则由 breakObstacle 显示"碎!"
   }
   // 跳跃物理（重力更小 → 滞空更久）
   if (jumpVel !== 0 || camera.position.y > BASE_Y) {
@@ -279,18 +280,61 @@ function checkObstacles() {
     }
   }
 }
+// 出拳：立即击碎前方一定范围内最近的可击障碍（不必卡在经过的瞬间）
+const PUNCH_RANGE = 26; // 出拳可击碎的前方距离
+function tryPunchBreak() {
+  let best = null, bestAhead = Infinity;
+  for (const seg of segments) {
+    const o = seg.userData.obstacle;
+    if (!o || o.type !== OB.PUNCH || o.evaluated || o.broken) continue;
+    const wz = seg.position.z + o.mesh.position.z;
+    const ahead = camera.position.z - wz; // >0 = 在前方
+    if (ahead > -1.5 && ahead < PUNCH_RANGE && ahead < bestAhead) {
+      bestAhead = ahead; best = o;
+    }
+  }
+  if (best) { best.evaluated = true; breakObstacle(best); return true; }
+  return false;
+}
+
+// 碎片 + 震屏，强化打击感
+const fragGeo = new THREE.BoxGeometry(0.28, 0.28, 0.28);
+const fragments = [];
+const _wp = new THREE.Vector3();
 function breakObstacle(o) {
   o.broken = true;
-  o.mesh.material.emissive.set(0xffffff);
-  // 简单碎裂：快速缩放消失
-  const start = performance.now();
-  (function anim() {
-    const t = (performance.now() - start) / 250;
-    if (t >= 1 || !o.mesh.parent) { o.mesh.visible = false; return; }
-    o.mesh.scale.y *= 0.85; o.mesh.scale.x *= 1.05;
-    o.mesh.material.opacity = 1 - t; o.mesh.material.transparent = true;
-    requestAnimationFrame(anim);
-  })();
+  o.mesh.getWorldPosition(_wp);
+  o.mesh.visible = false;
+  const baseColor = o.mesh.material.color.getHex();
+  for (let i = 0; i < 16; i++) {
+    const m = new THREE.Mesh(
+      fragGeo,
+      new THREE.MeshStandardMaterial({ color: baseColor, emissive: 0xff8855, emissiveIntensity: 1.3, transparent: true })
+    );
+    m.position.set(_wp.x + (Math.random() - 0.5) * 2, _wp.y + (Math.random() - 0.5) * 1.6, _wp.z);
+    m.scale.setScalar(0.5 + Math.random());
+    scene.add(m);
+    fragments.push({
+      mesh: m, life: 0.75, max: 0.75,
+      v: new THREE.Vector3((Math.random() - 0.5) * 9, (Math.random() * 5) + 2, (Math.random()) * 6 + 1),
+      rot: new THREE.Vector3(Math.random() * 12, Math.random() * 12, Math.random() * 12),
+    });
+  }
+  screenShake = Math.max(screenShake, 0.45);
+  Sound.shatter();
+  flashCue("碎!", "#ff8855");
+}
+function updateFragments(dt) {
+  for (let i = fragments.length - 1; i >= 0; i--) {
+    const f = fragments[i];
+    f.life -= dt;
+    if (f.life <= 0) { scene.remove(f.mesh); f.mesh.material.dispose(); fragments.splice(i, 1); continue; }
+    f.v.y -= 20 * dt;
+    f.mesh.position.addScaledVector(f.v, dt);
+    f.mesh.rotation.x += f.rot.x * dt;
+    f.mesh.rotation.y += f.rot.y * dt;
+    f.mesh.material.opacity = Math.max(0, f.life / f.max);
+  }
 }
 function hit() {
   if (invuln > 0) return;
@@ -299,6 +343,7 @@ function hit() {
   speed = Math.max(5, speed - 1.5);
   canvas.classList.remove("hurt"); void canvas.offsetWidth; canvas.classList.add("hurt");
   flashCue("✕", "#ff3b3b");
+  screenShake = Math.max(screenShake, 0.6);
   Sound.hit();
   if (health <= 0) gameOver();
 }
@@ -364,10 +409,22 @@ function loop() {
     flickerLights();
   }
 
+  updateFragments(dt);
   followLight.position.set(camera.position.x, HEIGHT - 0.5, camera.position.z - 2);
+
+  // 震屏：仅在渲染这一帧叠加偏移，渲染后立刻还原，避免位移漂移
+  let sx = 0, sy = 0, sz = 0;
+  if (screenShake > 0.001) {
+    sx = (Math.random() - 0.5) * screenShake;
+    sy = (Math.random() - 0.5) * screenShake;
+    sz = (Math.random() - 0.5) * screenShake * 0.08;
+    camera.position.x += sx; camera.position.y += sy; camera.rotation.z += sz;
+    screenShake = Math.max(0, screenShake - dt * 2.2);
+  }
   const tr = performance.now();
   renderer.render(scene, camera);
   renderMs = performance.now() - tr;
+  camera.position.x -= sx; camera.position.y -= sy; camera.rotation.z -= sz;
 
   // FPS / HUD
   fpsN++; fpsT += dt;
