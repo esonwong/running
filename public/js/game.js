@@ -421,14 +421,24 @@ async function start() {
   $("start-btn").disabled = true;
   Sound.init(); // 在用户点击手势内解锁音频
   overlay.classList.add("hidden"); // 立刻收起开始界面，进度条独占屏幕
-  loadIndeterminate("正在加载体感模型…");
+  loadIndeterminate("正在加载体感运行时…");
+  // 模型下载进度回调：有总大小就显示真实百分比，下完才进入下一步
+  const onModelProgress = (pct, recv, total) => {
+    if (pct == null) { loadIndeterminate("正在下载体感模型…"); return; }
+    $("load-text").textContent = pct >= 1 ? "模型下载完成，正在初始化…" : "正在下载体感模型…";
+    $("load-pct").style.display = "block";
+    $("load-hint").style.display = "block";
+    loadProgress(pct * 100);
+    $("load-hint").textContent =
+      `${(recv / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB`;
+  };
   try {
     pose = new PoseController($("cam"), $("skeleton"));
     window.__pose = pose; // 便于调试
-    // 超时保护：20 秒内没就绪（摄像头未授权/模型下载卡住）就退回键盘
+    // 超时保护：60 秒（含模型下载+摄像头授权）未就绪就退回键盘
     await Promise.race([
-      pose.init(),
-      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 20000)),
+      pose.init(onModelProgress),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 60000)),
     ]);
     poseOk = true;
   } catch (e) {

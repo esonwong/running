@@ -71,20 +71,50 @@ export class PoseController {
     this.notReady = true;
   }
 
-  async init() {
+  // 带进度地下载模型（onProgress(pct0to1, receivedBytes, totalBytes)；pct 为 null 表示拿不到总大小）
+  async _fetchModel(url, onProgress) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("模型下载失败 HTTP " + res.status);
+    const total = Number(res.headers.get("content-length")) || 0;
+    if (!res.body || !res.body.getReader) {
+      // 不支持流式：直接整块下载
+      const buf = new Uint8Array(await res.arrayBuffer());
+      onProgress && onProgress(1, buf.length, buf.length);
+      return buf;
+    }
+    const reader = res.body.getReader();
+    const chunks = [];
+    let received = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+      onProgress && onProgress(total ? received / total : null, received, total);
+    }
+    const buf = new Uint8Array(received);
+    let off = 0;
+    for (const c of chunks) { buf.set(c, off); off += c.length; }
+    onProgress && onProgress(1, received, total || received);
+    return buf;
+  }
+
+  async init(onProgress) {
     const vision = await FilesetResolver.forVisionTasks(
       "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/wasm"
+    );
+    // 自己下载模型 → 拿到真实进度，再用 modelAssetBuffer 交给 MediaPipe
+    const modelBuf = await this._fetchModel(
+      "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+      onProgress
     );
     // VIDEO 模式：利用帧间跟踪，更快更稳（实时游戏首选）。
     // 之前的崩溃根因是"摄像头未就绪时喂了 0×0 帧"永久毒化计算图，
     // 已由 update() 里的就绪保护解决，与运行模式/委派无关。
+    // 每次尝试用一份独立拷贝（buffer 创建后会被 wasm 接管/转移）。
     const make = (delegate) =>
       PoseLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath:
-            "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
-          delegate,
-        },
+        baseOptions: { modelAssetBuffer: modelBuf.slice(), delegate },
         runningMode: "VIDEO",
         numPoses: 1,
       });
