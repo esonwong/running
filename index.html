@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>无尽走廊 · 体感梦核</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- 3D 画布 -->
+  <canvas id="scene"></canvas>
+
+  <!-- 顶部 HUD -->
+  <div id="hud">
+    <div id="hud-left">
+      <div class="stat">距离 <span id="distance">0</span> m</div>
+      <div class="stat">生命 <span id="health">♥♥♥</span></div>
+    </div>
+    <div id="hud-right">
+      <div class="stat small">动作 <span id="action">—</span></div>
+      <div class="stat small">FPS <span id="fps">0</span></div>
+    </div>
+  </div>
+
+  <!-- 摄像头骨骼预览 -->
+  <div id="cam-box">
+    <video id="cam" playsinline muted></video>
+    <canvas id="skeleton"></canvas>
+    <div id="cam-label">摄像头</div>
+  </div>
+
+  <!-- 提示中央动作 -->
+  <div id="cue"></div>
+
+  <!-- 调试面板（按 D 切换） -->
+  <pre id="debug"></pre>
+
+  <!-- 开始 / 校准 / 结束 遮罩 -->
+  <div id="overlay">
+    <div id="overlay-card">
+      <h1 id="ov-title">无 尽 走 廊</h1>
+      <p id="ov-sub">体感梦核 · 用身体奔跑</p>
+      <ul id="ov-howto">
+        <li>🦵 真人<b>原地起跳</b> → 跳过地面低栏</li>
+        <li>🧎 真人<b>下蹲</b> → 钻过头顶吊障</li>
+        <li>↔️ 身体<b>左右侧移</b> → 躲开侧墙</li>
+        <li>👊 向前<b>出拳</b> → 击碎挡板</li>
+      </ul>
+      <button id="start-btn">点击开始（需要摄像头）</button>
+      <p id="ov-note">请站在能拍到上半身和手臂的位置，光线充足</p>
+    </div>
+  </div>
+
+  <div id="loading" class="hidden">
+    <div id="loading-card">
+      <div id="load-text">正在加载体感模型…</div>
+      <div id="progress"><div id="progress-bar"></div></div>
+      <div id="load-pct">0%</div>
+      <div id="load-hint">首次需下载模型，约 5–15 秒</div>
+    </div>
+  </div>
+
+  <script type="module" src="js/game.js"></script>
+</body>
+</html>
