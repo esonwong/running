@@ -507,83 +507,89 @@ async function start() {
     flashCue("体感不可用，用方向键 ← →，空格跳，↓蹲，F拳", "#ff8855");
   }
 
-  // 校准阶段：必须站稳保持 HOLD_SEC 秒，进度才会涨满；一动就回退
-  if (poseOk) {
-    pose.startCalibration();
-    $("load-hint").style.display = "block";
-    $("load-pct").style.display = "block";
-    let held = 0, last = performance.now();
-    await new Promise((resolve) => {
-      (function tick() {
-        const now = performance.now();
-        const dt = Math.min(0.05, (now - last) / 1000); last = now;
-        // 站稳才累积；没站稳/丢追踪则较快回退
-        if (pose.tracked && pose.still) held += dt;
-        else held = Math.max(0, held - dt * 1.5);
-        loadProgress(Math.min(100, (held / HOLD_SEC) * 100));
+  await beginRun();
+}
 
-        if (!pose.tracked) {
-          $("load-text").textContent = "请站到摄像头画面中";
-          $("load-hint").textContent = "需要拍到上半身和手臂";
-        } else if (!pose.still) {
-          $("load-text").textContent = "请站稳，别动";
-          $("load-hint").textContent = "保持自然站姿不动";
-        } else {
-          $("load-text").textContent = `保持住… ${Math.max(0, HOLD_SEC - held).toFixed(1)}s`;
-          $("load-hint").textContent = "正在记录站立基准";
-        }
+// 三段校准（站稳 + 跳 + 拳），仅体感可用时调用
+async function calibrate() {
+  $("loading").classList.remove("hidden");
+  $("load-hint").style.display = "block";
+  $("load-pct").style.display = "block";
 
-        if (held >= HOLD_SEC) { pose.finalizeCalibration(); resolve(); }
-        else requestAnimationFrame(tick);
-      })();
-    });
+  // 1) 站稳校准：提示站在空旷无遮挡处，必须站稳保持 HOLD_SEC 秒
+  pose.startCalibration();
+  let held = 0, last = performance.now();
+  await new Promise((resolve) => {
+    (function tick() {
+      const now = performance.now();
+      const dt = Math.min(0.05, (now - last) / 1000); last = now;
+      if (pose.tracked && pose.still) held += dt;
+      else held = Math.max(0, held - dt * 1.5);
+      loadProgress(Math.min(100, (held / HOLD_SEC) * 100));
+      if (!pose.tracked) {
+        $("load-text").textContent = "请站到摄像头画面中";
+        $("load-hint").textContent = "站在空旷无遮挡处，拍到上半身和手臂";
+      } else if (!pose.still) {
+        $("load-text").textContent = "请站稳，别动";
+        $("load-hint").textContent = "选个空旷的位置，周围别有人或杂物走动";
+      } else {
+        $("load-text").textContent = `保持住… ${Math.max(0, HOLD_SEC - held).toFixed(1)}s`;
+        $("load-hint").textContent = "正在记录站立基准";
+      }
+      if (held >= HOLD_SEC) { pose.finalizeCalibration(); resolve(); }
+      else requestAnimationFrame(tick);
+    })();
+  });
 
-    // 跳跃校准：原地跳，按你的实际起跳幅度设定个性化阈值
-    $("load-text").textContent = "原地跳一下！";
-    $("load-hint").textContent = "用你平时的力度起跳";
-    $("load-pct").style.display = "none";
-    let jpeak = 0; const jt0 = performance.now();
-    await new Promise((resolve) => {
-      (function tick() {
-        const el = performance.now() - jt0;
-        if (pose.tracked) jpeak = Math.max(jpeak, pose.dUp || 0);
-        loadProgress(Math.min(100, (el / JUMPCAL_MS) * 100));
-        $("load-hint").textContent = jpeak > 0.05 ? `已记录起跳 ${jpeak.toFixed(2)} ✓` : "用你平时的力度起跳";
-        if (el >= JUMPCAL_MS) resolve();
-        else requestAnimationFrame(tick);
-      })();
-    });
-    if (jpeak > 0.05) pose.jumpThresh = Math.min(0.12, Math.max(0.04, jpeak * 0.5));
-    pose._jumpQueued = false; // 清除校准期间的误触发
+  // 2) 跳跃校准：按实际起跳幅度设阈值
+  $("load-text").textContent = "原地跳一下！";
+  $("load-hint").textContent = "用你平时的力度起跳";
+  let jpeak = 0; const jt0 = performance.now();
+  await new Promise((resolve) => {
+    (function tick() {
+      const el = performance.now() - jt0;
+      if (pose.tracked) jpeak = Math.max(jpeak, pose.dUp || 0);
+      loadProgress(Math.min(100, (el / JUMPCAL_MS) * 100));
+      $("load-hint").textContent = jpeak > 0.05 ? `已记录起跳 ${jpeak.toFixed(2)} ✓` : "用你平时的力度起跳";
+      if (el >= JUMPCAL_MS) resolve();
+      else requestAnimationFrame(tick);
+    })();
+  });
+  if (jpeak > 0.05) pose.jumpThresh = Math.min(0.12, Math.max(0.04, jpeak * 0.5));
+  pose._jumpQueued = false;
 
-    // 出拳校准：记录你出拳的"伸展范围"（收回↔伸直），自适应阈值
-    $("load-text").textContent = "向前出拳几次！";
-    $("load-hint").textContent = "收回再用力打出，重复几下";
-    let extPeak = 0, extMin = 1; const pt0 = performance.now();
-    await new Promise((resolve) => {
-      (function tick() {
-        const el = performance.now() - pt0;
-        if (pose.tracked) {
-          const e = pose.dPunch || 0;
-          if (e > extPeak) extPeak = e;
-          if (e < extMin && e > 0.3) extMin = e;
-        }
-        loadProgress(Math.min(100, (el / PUNCHCAL_MS) * 100));
-        $("load-hint").textContent = extPeak - extMin > 0.12 ? `已记录出拳 ✓` : "收回再用力打出，重复几下";
-        if (el >= PUNCHCAL_MS) resolve();
-        else requestAnimationFrame(tick);
-      })();
-    });
-    if (extPeak - extMin > 0.12) {
-      pose.punchExtHigh = Math.min(0.95, Math.max(0.78, extMin + 0.6 * (extPeak - extMin)));
-      pose.punchExtLow = Math.min(pose.punchExtHigh - 0.05, Math.max(0.6, extMin + 0.25 * (extPeak - extMin)));
-    }
-    pose._punchQueued = false; // 清除校准期间的误触发
+  // 3) 出拳校准：按伸展范围自适应阈值
+  $("load-text").textContent = "向前出拳几次！";
+  $("load-hint").textContent = "收回再用力打出，重复几下";
+  let extPeak = 0, extMin = 1; const pt0 = performance.now();
+  await new Promise((resolve) => {
+    (function tick() {
+      const el = performance.now() - pt0;
+      if (pose.tracked) {
+        const e = pose.dPunch || 0;
+        if (e > extPeak) extPeak = e;
+        if (e < extMin && e > 0.3) extMin = e;
+      }
+      loadProgress(Math.min(100, (el / PUNCHCAL_MS) * 100));
+      $("load-hint").textContent = extPeak - extMin > 0.12 ? `已记录出拳 ✓` : "收回再用力打出，重复几下";
+      if (el >= PUNCHCAL_MS) resolve();
+      else requestAnimationFrame(tick);
+    })();
+  });
+  if (extPeak - extMin > 0.12) {
+    pose.punchExtHigh = Math.min(0.95, Math.max(0.78, extMin + 0.6 * (extPeak - extMin)));
+    pose.punchExtLow = Math.min(pose.punchExtHigh - 0.05, Math.max(0.6, extMin + 0.25 * (extPeak - extMin)));
   }
-  $("loading").classList.add("hidden");
+  pose._punchQueued = false;
+}
 
+let musicStarted = false;
+// 校准（若体感可用）→ 开跑。start() 与 restart() 共用
+async function beginRun() {
+  if (poseOk) await calibrate();
+  $("loading").classList.add("hidden");
   Sound.go();
-  Sound.startMusic();
+  if (!musicStarted) { Sound.startMusic(); musicStarted = true; }
   running = true;
   flashCue("出发！", "#c8ff64");
 }
@@ -603,16 +609,15 @@ function gameOver() {
   btn.onclick = restart;
 }
 
-// 原地重开：复用已开启的摄像头与体感，不刷新、不再申请权限
-function restart() {
+// 原地重开：复用已开启的摄像头与体感，不刷新、不再申请权限；重开同样会重新校准
+async function restart() {
   if (!awaitingRestart) return;
   awaitingRestart = false;
   distance = 0; health = 3; speed = 7; jumpVel = 0; invuln = 0; lastPunch = -9999;
   camera.position.set(0, BASE_Y, 0);
   resetSegments();
   overlay.classList.add("hidden");
-  running = true;
-  flashCue("出发！", "#c8ff64");
+  await beginRun(); // 重新校准（体感可用时）后开跑
 }
 function resetSegments() {
   for (let i = 0; i < segments.length; i++) {
