@@ -59,6 +59,8 @@ export class PoseController {
     this.dPunch = 0;          // 当前最大手臂伸展度（0.5 弯 ~ 1.0 直），用于校准/调试
     this._armState = { L: "bent", R: "bent" };
     this._lastBent = { L: 0, R: 0 };
+    this._lastPunchTs = 0;
+    this.punchCooldown = 450; // ms，两拳最小间隔，防连发误触
     this.tracked = false;
     this.label = "—";
 
@@ -250,9 +252,11 @@ export class PoseController {
 
     // ---- 出拳：手腕世界坐标 z 朝摄像头快速位移 ----
     // 出拳：手臂"快速伸展"检测（肩-肘-腕 2D）。
-    // 一拳 = 手臂从弯(ext<低阈)在 350ms 内伸直(ext>高阈)，且手腕在胸口高度以上；
-    // 伸出后状态置 armed，必须收回到弯曲才能再次触发，避免举着手刷拳。
+    // 一拳 = 手臂从弯(ext<低阈)在 350ms 内伸直(ext>高阈)，且手腕落在"前方出拳带"内
+    // （肩线以下到腹部之间，排除起跳/跑动时手臂上扬误触）；并有冷却防连发。
+    // 伸出后置 armed，必须收回到弯曲才能再次触发，避免举着手刷拳。
     const chestY = (lm[L_SHOULDER].y + lm[L_HIP].y) / 2;
+    const shoulderY = (lm[L_SHOULDER].y + lm[R_SHOULDER].y) / 2;
     let maxExt = 0;
     for (const [key, sh, el, wr] of [
       ["L", L_SHOULDER, L_ELBOW, L_WRIST],
@@ -268,10 +272,13 @@ export class PoseController {
         this._armState[key] === "bent" &&
         ext > this.punchExtHigh &&
         nowMs - this._lastBent[key] < 350 &&
-        lm[wr].y < chestY + 0.15
+        lm[wr].y > shoulderY - 0.05 &&          // 手腕不高于肩太多（排除举手/起跳上扬）
+        lm[wr].y < chestY + 0.18 &&             // 也不低于腹部太多
+        nowMs - this._lastPunchTs > this.punchCooldown
       ) {
         this._punchQueued = true;
         this._armState[key] = "armed";
+        this._lastPunchTs = nowMs;
       }
     }
     this.dPunch = maxExt;

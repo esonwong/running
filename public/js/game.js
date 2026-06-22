@@ -226,6 +226,7 @@ function handleActions(dt) {
   let jumpPulse = pose ? pose.consumeJump() : false;
   if (kbJump) { jumpPulse = true; kbJump = false; }
   if (jumpPulse && camera.position.y <= BASE_Y + 0.01) {
+    camera.position.y = BASE_Y; // 从站立高度起跳，保证弧线一致（即使刚才在蹲）
     jumpVel = JUMP_V0;
     flashCue("跳", "#c8ff64");
     Sound.jump();
@@ -264,15 +265,20 @@ function handleActions(dt) {
 }
 
 // ---------------- 碰撞 / 障碍判定 ----------------
+// 窗口判定：障碍进入该距离即开始接受"通过"，任意一帧满足条件就算过。
+// 给起跳/下蹲/侧移留出反应与动作时间，避免"必须在经过的那一瞬间正好到位"。
+const PASS_WINDOW = 4.5;
 function checkObstacles() {
   for (const seg of segments) {
     const o = seg.userData.obstacle;
-    if (!o || o.evaluated) continue;
-    const worldZ = seg.position.z + o.mesh.position.z;
-    // 玩家在 z=0，向 -z 前进；障碍 worldZ 从负向 0 靠近
-    if (worldZ >= camera.position.z - 0.3) {
+    if (!o || o.evaluated || o.broken) continue;
+    const aheadDist = camera.position.z - (seg.position.z + o.mesh.position.z);
+    // 进入窗口：只要有一帧通过就锁定
+    if (aheadDist <= PASS_WINDOW && !o.passed && o.passCheck()) o.passed = true;
+    // 到达玩家：结算
+    if (aheadDist <= 0.3) {
       o.evaluated = true;
-      if (o.passCheck()) {
+      if (o.passed) {
         if (o.type === OB.PUNCH) breakObstacle(o);
       } else {
         hit();
